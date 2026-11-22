@@ -38,6 +38,8 @@ cmake --build build --target cemu_libretro
 # Result: bin/cemu_libretro.so
 ```
 
+To read OREs, oxyromon's format, build libsmelt in an oxyromon checkout first (`cargo build --release` in `crates/smelt-rs`), and add `-DORE=ON -DSMELT_DIR=<oxyromon>/crates/smelt-rs` to the configure line. Linux only for now. `ore` then goes into `supported_extensions` in your copy of `cemu_libretro.info`.
+
 ## Install
 
 ```bash
@@ -50,8 +52,8 @@ cp cemu_libretro.info ~/.config/retroarch/info/
 Everything the core reads lives under `Cemu/` in RetroArch's system directory (`<system>`), except the emulated NAND, which is in the save directory.
 
 - **Keys:** `keys.txt` in `<system>/Cemu/`. Encrypted `.wud`/`.wux` images and NUS titles need it; a disc image's key can also be kept beside it, with the same name and the extension `.key` (`game.wux`, `game.key`), 16 bytes or 32 hex digits.
-- **Games:** `.wua`, `.wud`, `.wux`, `.iso`, `.rpx`, `.elf`, or `title.tmd` of an unpacked NUS title.
-- **Updates and DLC:** put them in `<system>/Cemu/titles/`, one folder per update or DLC, either as downloaded (`.app`/`.h3` next to `title.tmd` and `title.tik`) or unpacked (`code`/`content`/`meta`). They are found by title id and used without being copied.
+- **Games:** `.wua`, `.wud`, `.wux`, `.iso`, `.rpx`, `.elf`, or `title.tmd` of an unpacked NUS title; with an ORE build (below), `.ore` too.
+- **Updates and DLC:** put them in `<system>/Cemu/titles/`, one folder per update or DLC, either as downloaded (`.app`/`.h3` next to `title.tmd` and `title.tik`) or unpacked (`code`/`content`/`meta`). They are found by title id and used without being copied. With an ORE build, an update or DLC ORE also goes in `titles/`, or beside the game, as oxyromon writes them.
 - **Graphic packs:** the community packs are built into the core and unpacked to `<system>/Cemu/graphicPacks/` when content loads. They are refreshed whenever the core is a newer build, so don't edit them there: your own packs, and changed copies of the built-in ones, go in `<system>/Cemu/customGraphicPacks/`. A pack there at the same path as a built-in one (the folder with its `rules.txt`) replaces it, and survives core updates. Each pack the loaded game has shows up under **Graphic Packs** in the core options, with an Enabled switch and its presets. Changes take effect the next time the game is loaded.
 - **Shared fonts:** `CafeStd.ttf`, `CafeCn.ttf`, `CafeKr.ttf` and `CafeTw.ttf` in `<system>/Cemu/resources/sharedFonts/`. Games need them for Japanese and other CJK text.
 - **NAND (mlc01):** `<save>/Cemu/mlc01/`, created with the default folders on first start, as standalone Cemu does.

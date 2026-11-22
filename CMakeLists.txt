@@ -228,6 +228,11 @@ if (ENABLE_LIBUSB)
 	add_compile_definitions(HAS_LIBUSB)
 endif()
 
+# ORE, oxyromon's format, read through libsmelt: SMELT_DIR is oxyromon's
+# crates/smelt-rs, built there first with cargo build --release
+option(ORE "Read Wii U disc and eShop title OREs through libsmelt" OFF)
+set(SMELT_DIR "" CACHE PATH "oxyromon's crates/smelt-rs, for ORE")
+
 if (ENABLE_LIBRETRO)
 	add_compile_definitions(ENABLE_LIBRETRO)
 	# All static libs must be compiled with -fPIC for shared library linking

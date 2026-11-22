@@ -2,6 +2,7 @@
 #include "Cafe/Filesystem/fscDeviceHostFS.h"
 #include "Cafe/Filesystem/WUHB/WUHBReader.h"
 #include "Cafe/Filesystem/FST/FST.h"
+#include "Cafe/Filesystem/WUD/wud.h"
 #include "pugixml.hpp"
 #include "Common/FileStream.h"
 #include "Common/VFSFileStream.h"
@@ -253,6 +254,26 @@ bool TitleInfo::DetectFormat(const fs::path& path, fs::path& pathOut, TitleDataF
 			delete zar;
 			return foundBase;
 		}
+#ifdef HAVE_ORE
+		else if (boost::iends_with(filenameStr, ".ore"))
+		{
+			// an ORE of a disc reads as a WUD, an eShop title's as its NUS
+			// folder; the path stays the .ore's either way
+			switch (wud_probeOre(path))
+			{
+			case WiiUOreKind::DISC:
+				formatOut = TitleDataFormat::WUD;
+				pathOut = path;
+				return true;
+			case WiiUOreKind::TITLE:
+				formatOut = TitleDataFormat::NUS;
+				pathOut = path;
+				return true;
+			default:
+				return false;
+			}
+		}
+#endif
 		else if (boost::iends_with(filenameStr, ".wuhb"))
 		{
 			std::unique_ptr<WUHBReader> reader{WUHBReader::FromPath(path)};
@@ -430,6 +451,10 @@ bool TitleInfo::Mount(std::string_view virtualPath, std::string_view subfolder, 
 			cemu_assert_debug(!m_wudVolume);
 			if(m_titleFormat == TitleDataFormat::WUD)
 				m_wudVolume = FSTVolume::OpenFromDiscImage(m_fullPath, &fstError); // open wud/wux
+#ifdef HAVE_ORE
+			else if (boost::iends_with(_pathToUtf8(m_fullPath.filename()), ".ore"))
+				m_wudVolume = FSTVolume::OpenFromOreTitle(m_fullPath, &fstError); // an eShop title's ORE, the path points to the .ore
+#endif
 			else
 				m_wudVolume = FSTVolume::OpenFromContentFolder(m_fullPath.parent_path(), &fstError); // open from .app files directory, the path points to /title.tmd
 		}

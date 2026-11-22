@@ -371,6 +371,9 @@ bool _IsKnownFileNameOrExtension(const fs::path& path)
 		fileExtension == ".wux" ||
 		fileExtension == ".iso" ||
 		fileExtension == ".wua" ||
+#ifdef HAVE_ORE
+		fileExtension == ".ore" ||
+#endif
 		fileExtension == ".wuhb";
 	// note: To detect extracted titles with RPX we rely on the presence of the content,code,meta directory structure
 }

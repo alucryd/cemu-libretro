@@ -11,6 +11,10 @@
 
 #include "boost/range/adaptor/reversed.hpp"
 
+#ifdef HAVE_ORE
+#include <smelt.h>
+#endif
+
 #define SET_FST_ERROR(__code) 	if (errorCodeOut) *errorCodeOut = ErrorCode::__code
 
 static_assert(sizeof(NCrypto::AesIv) == 16); // make sure IV is actually 16 bytes
@@ -117,6 +121,73 @@ private:
 
 	std::vector<std::unique_ptr<VFSFileStream>> m_clusterFile;
 };
+
+#ifdef HAVE_ORE
+// An eShop title's ORE: its folder's files end to end in the byte view, each
+// content where its file lies, named as NUSspli names it (00000004.app) or as
+// the CDN does (00000004)
+class FSTDataSourceOre : public FSTDataSource
+{
+public:
+	struct File
+	{
+		uint64 offset;
+		uint64 size;
+	};
+
+	// takes the ingot, closed with the data source, or at once on a failure
+	static FSTDataSourceOre* Open(smelt_ingot* ingot, const std::map<std::string, File>& files, NCrypto::TMDParser& tmd)
+	{
+		uint32 maxIndex = 0;
+		for (auto& itr : tmd.GetContentList())
+			maxIndex = std::max(maxIndex, (uint32)itr.index);
+		std::vector<std::optional<File>> clusters(maxIndex + 1);
+		for (auto& itr : tmd.GetContentList())
+		{
+			auto it = files.find(fmt::format("{:08x}.app", itr.contentId));
+			if (it == files.end())
+				it = files.find(fmt::format("{:08x}", itr.contentId));
+			if (it == files.end())
+			{
+				cemuLog_log(LogType::Force, "ORE: content {:08x} missing", itr.contentId);
+				smelt_close(ingot);
+				return nullptr;
+			}
+			clusters[itr.index] = it->second;
+		}
+		return new FSTDataSourceOre(ingot, std::move(clusters));
+	}
+
+	uint64 readData(uint16 clusterIndex, uint64 clusterOffset, uint64 offset, void* data, uint64 size) override
+	{
+		// like an .app file, a content is already relative to its cluster's base
+		if (clusterIndex >= m_clusters.size() || !m_clusters[clusterIndex])
+			return 0;
+		const File& file = *m_clusters[clusterIndex];
+		if (offset >= file.size)
+			return 0;
+		size = std::min(size, file.size - offset);
+		if (smelt_read(m_ingot, file.offset + offset, (uint8_t*)data, (size_t)size) != SMELT_OK)
+		{
+			cemuLog_log(LogType::Force, "ORE read of {} bytes at {:#x}: {}", size, file.offset + offset, smelt_last_error());
+			return 0;
+		}
+		return size;
+	}
+
+	~FSTDataSourceOre() override
+	{
+		smelt_close(m_ingot);
+	}
+
+private:
+	FSTDataSourceOre(smelt_ingot* ingot, std::vector<std::optional<File>>&& clusters)
+		: m_ingot(ingot), m_clusters(std::move(clusters)) {}
+
+	smelt_ingot* m_ingot;
+	std::vector<std::optional<File>> m_clusters;
+};
+#endif
 
 constexpr size_t DISC_SECTOR_SIZE = 0x8000;
 
@@ -483,6 +554,92 @@ FSTVolume* FSTVolume::OpenFromContentFolder(fs::path folderPath, ErrorCode* erro
 		SET_FST_ERROR(OK);
 	return fstVolume;
 }
+
+#ifdef HAVE_ORE
+FSTVolume* FSTVolume::OpenFromOreTitle(const fs::path& path, ErrorCode* errorCodeOut)
+{
+	SET_FST_ERROR(UNKNOWN_ERROR);
+	smelt_ingot* ingot = nullptr;
+	if (smelt_open(_pathToUtf8(path).c_str(), nullptr, &ingot) != SMELT_OK)
+	{
+		cemuLog_log(LogType::Force, "ORE {}: {}", _pathToUtf8(path), smelt_last_error());
+		return nullptr;
+	}
+	// its files by name, lower case; the TMD as NUSspli names it, title.tmd,
+	// or as the CDN does, tmd or tmd.<version>
+	std::map<std::string, FSTDataSourceOre::File> files;
+	std::string tmdName;
+	size_t count = 0;
+	smelt_file_count(ingot, &count);
+	for (size_t i = 0; i < count; i++)
+	{
+		char name[256];
+		size_t nameLen = sizeof(name);
+		FSTDataSourceOre::File file{};
+		if (smelt_file_at(ingot, i, name, &nameLen, &file.offset, &file.size) != SMELT_OK)
+			continue;
+		std::string lower(name);
+		for (char& c : lower)
+			c = _ansiToLower(c);
+		if (lower == "title.tmd" || lower == "tmd" || (tmdName.empty() && lower.starts_with("tmd.")))
+			tmdName = lower;
+		files.emplace(std::move(lower), file);
+	}
+	auto tmdFile = files.find(tmdName);
+	std::vector<uint8> tmdData;
+	if (tmdFile != files.end())
+	{
+		tmdData.resize(tmdFile->second.size);
+		if (smelt_read(ingot, tmdFile->second.offset, tmdData.data(), tmdData.size()) != SMELT_OK)
+			tmdData.clear();
+	}
+	NCrypto::TMDParser tmdParser;
+	if (tmdData.empty() || !tmdParser.parse(tmdData.data(), tmdData.size()))
+	{
+		SET_FST_ERROR(BAD_TITLE_TMD);
+		smelt_close(ingot);
+		return nullptr;
+	}
+	// the ticket, kept apart from the byte view
+	size_t ticketLen = 0;
+	if (smelt_ticket(ingot, nullptr, &ticketLen) != SMELT_ERR_BUFFER_TOO_SMALL)
+	{
+		SET_FST_ERROR(TITLE_TIK_MISSING);
+		smelt_close(ingot);
+		return nullptr;
+	}
+	std::vector<uint8> ticketData(ticketLen);
+	NCrypto::ETicketParser ticketParser;
+	if (smelt_ticket(ingot, ticketData.data(), &ticketLen) != SMELT_OK || !ticketParser.parse(ticketData.data(), ticketData.size()))
+	{
+		SET_FST_ERROR(BAD_TITLE_TIK);
+		smelt_close(ingot);
+		return nullptr;
+	}
+	NCrypto::AesKey titleKey;
+	ticketParser.GetTitleKey(titleKey);
+	std::unique_ptr<FSTDataSource> dataSource(FSTDataSourceOre::Open(ingot, files, tmdParser));
+	if (!dataSource)
+		return nullptr;
+	// the FST from the first cluster, as OpenFromContentFolder reads it
+	ClusterHashMode fstHashMode = ClusterHashMode::RAW;
+	uint32 fstSize = 0;
+	for (auto& itr : tmdParser.GetContentList())
+	{
+		if (itr.index == 0)
+		{
+			if (HAS_FLAG(itr.contentFlags, NCrypto::TMDParser::TMDContentFlags::FLAG_HASHED_CONTENT))
+				fstHashMode = ClusterHashMode::HASH_INTERLEAVED;
+			cemu_assert_debug(itr.size <= 0xFFFFFFFF);
+			fstSize = (uint32)itr.size;
+		}
+	}
+	FSTVolume* fstVolume = FSTVolume::OpenFST(std::move(dataSource), 0, fstSize, &titleKey, fstHashMode, &tmdParser);
+	if (fstVolume)
+		SET_FST_ERROR(OK);
+	return fstVolume;
+}
+#endif
 
 FSTVolume* FSTVolume::OpenFST(FSTDataSource* dataSource, uint64 fstOffset, uint32 fstSize, NCrypto::AesKey* partitionTitleKey, ClusterHashMode fstHashMode, NCrypto::TMDParser* optionalTMD)
 {

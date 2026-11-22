@@ -47,6 +47,10 @@ public:
 	static FSTVolume* OpenFromDiscImage(const fs::path& path, NCrypto::AesKey& discTitleKey, ErrorCode* errorCodeOut = nullptr);
 	static FSTVolume* OpenFromDiscImage(const fs::path& path, ErrorCode* errorCodeOut = nullptr);
 	static FSTVolume* OpenFromContentFolder(fs::path folderPath, ErrorCode* errorCodeOut = nullptr);
+#ifdef HAVE_ORE
+	// an eShop title's ORE (oxyromon's format), read as its NUS folder
+	static FSTVolume* OpenFromOreTitle(const fs::path& path, ErrorCode* errorCodeOut = nullptr);
+#endif
 
 	~FSTVolume();
 

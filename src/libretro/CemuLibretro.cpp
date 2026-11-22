@@ -77,6 +77,9 @@
 
 #include "Cafe/Filesystem/FST/FST.h"
 #include "Cafe/Filesystem/FST/KeyCache.h"
+#ifdef HAVE_ORE
+#include "Cafe/Filesystem/WUD/wud.h"
+#endif
 
 #include "Cafe/GraphicPack/GraphicPack2.h"
 #include "Cafe/GameProfile/GameProfile.h"
@@ -4213,7 +4216,11 @@ RETRO_API void retro_get_system_info(struct retro_system_info* info)
 	info->need_fullpath = true;
 	// tmd: NUS/WUP dumps are a directory of .app files next to a title.tmd,
 	// and pointing the core at that title.tmd loads the title.
+#ifdef HAVE_ORE
+	info->valid_extensions = "wud|wux|wua|iso|rpx|elf|tmd|ore";
+#else
 	info->valid_extensions = "wud|wux|wua|iso|rpx|elf|tmd";
+#endif
 	info->block_extract = false;
 }
 
@@ -5304,7 +5311,9 @@ static void libretro_install_titles(std::vector<TitleInfo> found, bool removeSou
 			TitleId base = 0;
 			const bool inUse = haveRunning && CafeTitleList::FindBaseTitleId(title.GetAppTitleId(), base) && base == runningBase;
 			fs::path source = title.GetPath();
-			if (title.GetFormat() == TitleInfo::TitleDataFormat::NUS)
+			// a NUS folder goes whole, its path the title.tmd in it; an
+			// eShop title's ORE is the file itself
+			if (title.GetFormat() == TitleInfo::TitleDataFormat::NUS && !boost::iends_with(_pathToUtf8(source.filename()), ".ore"))
 				source = source.parent_path();
 			const bool removable = (title.GetFormat() == TitleInfo::TitleDataFormat::NUS ||
 				title.GetFormat() == TitleInfo::TitleDataFormat::HOST_FS) && inTitlesDir(source);
@@ -5434,6 +5443,30 @@ static void libretro_frame_gate_rearm()
 	s_gate_cv.notify_all();
 }
 
+#ifdef HAVE_ORE
+// oxyromon writes a game's update and DLC as OREs of their own, beside the
+// game whatever form it is in. Those of the game being launched join the
+// title list, to be picked by title id as the titles folder's are; the
+// others are only probed, their TMD read, not mounted.
+static void libretro_add_sibling_ore_titles(const fs::path& gamePath, TitleId gameTitleId)
+{
+	// a game, its update and its DLC differ in the type nibble of the high word alone
+	constexpr uint64 kTypeMask = 0xFFFFFFF0FFFFFFFFull;
+	std::error_code ec;
+	for (const auto& entry : fs::directory_iterator(gamePath.parent_path(), ec))
+	{
+		const fs::path& path = entry.path();
+		if (path == gamePath || !boost::iends_with(_pathToUtf8(path.filename()), ".ore") || !entry.is_regular_file(ec))
+			continue;
+		unsigned long long titleId = 0;
+		if (wud_probeOre(path, &titleId) != WiiUOreKind::TITLE || (titleId & kTypeMask) != (gameTitleId & kTypeMask))
+			continue;
+		cemuLog_log(LogType::Force, "update or DLC beside the game: {}", _pathToUtf8(path));
+		CafeTitleList::AddTitleFromPath(path);
+	}
+}
+#endif
+
 static void libretro_prepare_and_launch_title()
 {
 	libretro_frame_gate_rearm();
@@ -5455,6 +5488,9 @@ static void libretro_prepare_and_launch_title()
 		libretro_log(RETRO_LOG_INFO, "Valid title detected, launching via TitleId\n");
 
 		CafeTitleList::AddTitleFromPath(gamePath);
+#ifdef HAVE_ORE
+		libretro_add_sibling_ore_titles(gamePath, launchTitle.GetAppTitleId());
+#endif
 		libretro_log(RETRO_LOG_INFO, "waiting for the mandatory title scan\n");
 		CafeTitleList::WaitForMandatoryScan();
 

@@ -671,6 +671,18 @@ target_link_libraries(CemuCafe PRIVATE
   OpenSSL::SSL
 )
 
+if (ORE)
+	# A Rust static library built for the host, so linux only for now; the
+	# libraries after it are libstd's, from rustc --print native-static-libs.
+	# PUBLIC: the core's own sources test HAVE_ORE too
+	if (NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+		message(FATAL_ERROR "ORE is wired for linux only; the other platforms need libsmelt's native-static-libs for their own libc")
+	endif()
+	target_compile_definitions(CemuCafe PUBLIC HAVE_ORE)
+	target_include_directories(CemuCafe PRIVATE "${SMELT_DIR}/include")
+	target_link_libraries(CemuCafe PUBLIC "${SMELT_DIR}/target/release/libsmelt.a" pthread dl m rt util)
+endif()
+
 if (ENABLE_WAYLAND)
 	# PUBLIC because wayland-client.h is included in VulkanAPI.h
   target_link_libraries(CemuCafe PUBLIC Wayland::Client)

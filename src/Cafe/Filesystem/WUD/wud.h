@@ -20,15 +20,29 @@ struct wud_t
 	unsigned int*	indexTable;
 	long long		offsetIndexTable;
 	long long		offsetSectorArray;
+	// a disc ORE (oxyromon's format), read through libsmelt: then fs is null.
+	// Here without HAVE_ORE too, so the struct is one layout in every target
+	struct smelt_ingot* ore;
 };
 
 #define WUX_MAGIC_0	'0XUW' // "WUX0"
 #define WUX_MAGIC_1	0x1099d02e
 
 // wud and wux functions
-wud_t* wud_open(const fs::path& path); // transparently handles wud and wux files
+wud_t* wud_open(const fs::path& path); // transparently handles wud and wux files, and disc OREs
 void wud_close(wud_t* wud);
 
 bool wud_isWUXCompressed(wud_t* wud);
 unsigned int wud_readData(wud_t* wud, void* buffer, unsigned int length, long long offset);
 long long wud_getWUDSize(wud_t* wud);
+
+#ifdef HAVE_ORE
+enum class WiiUOreKind
+{
+	NOT_ORE, // no ORE, or none of the Wii U
+	DISC, // a disc image, read as a WUD
+	TITLE, // an eShop title, read as its NUS folder
+};
+// what a file is, as an ORE; for a title, its title id when its TMD gives it
+WiiUOreKind wud_probeOre(const fs::path& path, unsigned long long* titleIdOut = nullptr);
+#endif
